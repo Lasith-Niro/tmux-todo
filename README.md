@@ -16,14 +16,14 @@ A lightweight terminal todo app with a live tmux side pane. No dependencies beyo
 
 Add to `~/.tmux.conf`:
 ```
-set -g @plugin 'LasithNiro/tmux-todo'
+set -g @plugin 'Lasith-Niro/tmux-todo'
 ```
 Then press `Prefix + I` to install.
 
 ### Manual
 
 ```bash
-git clone https://github.com/LasithNiro/tmux-todo ~/.tmux/plugins/tmux-todo
+git clone https://github.com/Lasith-Niro/tmux-todo ~/.tmux/plugins/tmux-todo
 ~/.tmux/plugins/tmux-todo/todo.tmux
 ```
 
