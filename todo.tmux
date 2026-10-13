@@ -12,5 +12,7 @@ chmod +x "$CURRENT_DIR/scripts/todo.sh"
 mkdir -p "$HOME/.local/bin"
 ln -sf "$CURRENT_DIR/scripts/todo.sh" "$HOME/.local/bin/todo"
 
-# Bind default key: prefix + t = show/hide todo pane
-tmux bind-key t run-shell "$CURRENT_DIR/scripts/todo.sh --toggle"
+# Bind key (default prefix + t): show/hide todo pane
+TODO_KEY=$(tmux show-option -gv @todo-key 2>/dev/null)
+TODO_KEY="${TODO_KEY:-t}"
+tmux bind-key "$TODO_KEY" run-shell "$CURRENT_DIR/scripts/todo.sh --toggle"

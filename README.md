@@ -39,6 +39,7 @@ git clone https://github.com/Lasith-Niro/tmux-todo ~/.tmux/plugins/tmux-todo
 | `todo remove <id>` | Remove a task |
 | `todo list` | Print list in current pane |
 | `todo clear` | Remove all completed tasks |
+| `todo refresh-rate <sec>` | Set refresh rate in seconds (e.g. `todo refresh-rate 120`) |
 | `Prefix + t` | Toggle pane (keybind) |
 
 ## Configuration

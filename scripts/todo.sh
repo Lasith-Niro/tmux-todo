@@ -12,6 +12,7 @@
 #   todo remove <id>       Remove a task
 #   todo list              Print list in current pane
 #   todo clear             Remove all completed tasks
+#   todo refresh-rate <s   Set refresh rate in seconds
 #
 # tmux.conf options:
 #   set -g @todo-key             "t"      # toggle keybind (default: t)
@@ -20,8 +21,22 @@
 #   set -g @todo-refresh-interval "120"   # refresh seconds (default: 120)
 # ==============================================================================
 
-TODO_FILE="$HOME/.local/share/todo/todos.json"
-PANE_ID_FILE="$HOME/.local/share/todo/pane_id"
+DATA_DIR="${TODO_DATA_DIR:-$HOME/.local/share/todo}"
+TODO_FILE="${TODO_FILE:-$DATA_DIR/todos.json}"
+PANE_ID_FILE="$DATA_DIR/pane_id"
+REFRESH_FILE="$DATA_DIR/refresh_interval"
+export TODO_FILE
+
+get_refresh_interval() {
+  local interval
+  if [ -f "$REFRESH_FILE" ]; then
+    interval=$(cat "$REFRESH_FILE" 2>/dev/null)
+  fi
+  if [ -z "$interval" ]; then
+    interval=$(tmux show-option -gv @todo-refresh-interval 2>/dev/null)
+  fi
+  echo "${interval:-120}"
+}
 
 # ── READ TPM OPTIONS (with defaults) ─────────────────────────────────────────
 PANE_WIDTH=$(tmux show-option -gv @todo-pane-width 2>/dev/null)
@@ -30,8 +45,7 @@ PANE_WIDTH="${PANE_WIDTH:-36}"
 PANE_SIDE=$(tmux show-option -gv @todo-pane-side 2>/dev/null)
 PANE_SIDE="${PANE_SIDE:-right}"
 
-REFRESH_INTERVAL=$(tmux show-option -gv @todo-refresh-interval 2>/dev/null)
-REFRESH_INTERVAL="${REFRESH_INTERVAL:-120}"
+REFRESH_INTERVAL=$(get_refresh_interval)
 
 # ── COLORS ────────────────────────────────────────────────────────────────────
 RESET='\033[0m'
@@ -56,7 +70,7 @@ render_todos() {
   python3 << PYEOF
 import json, os
 
-TODO_FILE = os.path.expanduser("~/.local/share/todo/todos.json")
+TODO_FILE = os.environ.get("TODO_FILE", os.path.expanduser("~/.local/share/todo/todos.json"))
 with open(TODO_FILE) as f:
     data = json.load(f)
 
@@ -66,7 +80,7 @@ done    = [t for t in todos if t.get("done")]
 
 # Pane width from env (passed by watch loop)
 pane_w  = int(os.environ.get("TODO_PANE_WIDTH", "36"))
-inner   = pane_w - 5   # account for borders and padding
+line_w  = max(20, pane_w - 4)
 
 R  = "\033[0m"
 B  = "\033[1m"
@@ -77,15 +91,14 @@ Gr = "\033[0;90m"
 C  = "\033[0;36m"
 W  = "\033[1;37m"
 
-border_top = f"{B}{C}  ┌─ TODO " + "─" * (inner - 7) + f"┐{R}"
-border_bot = f"{B}{C}  └" + "─" * (inner) + f"┘{R}"
+border_top = f"{B}{C}  ── TODO " + "─" * max(0, line_w - 9) + f"{R}"
+border_bot = f"{B}{C}  " + "─" * line_w + f"{R}"
 
-def row(content, visible_len):
-    pad = " " * max(0, inner - 1 - visible_len)
-    print(f"{B}{C}  │{R} {content}{pad} {B}{C}│{R}")
+def row(content, visible_len=0):
+    print(f"  {content}")
 
 def blank():
-    print(f"{B}{C}  │{R}" + " " * (inner) + f"{B}{C}│{R}")
+    print()
 
 print()
 print(border_top)
@@ -93,28 +106,28 @@ blank()
 
 if not todos:
     msg = "No todos yet. Add one!"
-    row(f"{Gr}{msg}{R}", len(msg))
+    row(f"{Gr}{msg}{R}")
 else:
     if pending:
-        row(f"{B}{W}Pending{R}", 7)
+        row(f"{B}{W}Pending{R}")
         for t in pending:
             tid     = str(t["id"]).rjust(2)
-            max_len = inner - 7
+            max_len = max(10, line_w - 7)
             task    = t["task"][:max_len]
-            row(f"{Y}[{tid}]{R} {task}", 5 + len(task))
+            row(f"{Y}[{tid}]{R} {task}")
 
     if done:
         blank()
-        row(f"{B}{Gr}Completed{R}", 9)
+        row(f"{B}{Gr}Completed{R}")
         for t in done:
             tid     = str(t["id"]).rjust(2)
-            max_len = inner - 7
+            max_len = max(10, line_w - 7)
             task    = t["task"][:max_len]
-            row(f"{G}[{tid}]{R} {D}{task}{R}", 5 + len(task))
+            row(f"{G}[{tid}]{R} {D}{task}{R}")
 
 blank()
 summary = f"{len(done)}/{len(todos)} done"
-row(f"{Gr}{summary}{R}", len(summary))
+row(f"{Gr}{summary}{R}")
 print(border_bot)
 print()
 PYEOF
@@ -123,18 +136,39 @@ PYEOF
 # ── WATCH LOOP (runs inside the side pane) ────────────────────────────────────
 watch_loop() {
   export TODO_PANE_WIDTH="$PANE_WIDTH"
+  local last_refresh=0
+  local last_mtime=""
+  local last_interval=""
+
   while true; do
-    clear
-    render_todos
-    echo -e "  ${GRAY}↻ every ${REFRESH_INTERVAL}s  │  Prefix+$(tmux show-option -gv @todo-key 2>/dev/null || echo 't') to hide${RESET}"
-    sleep "$REFRESH_INTERVAL"
+    local current_interval
+    current_interval=$(get_refresh_interval)
+
+    local current_mtime=""
+    if [ -f "$TODO_FILE" ]; then
+      current_mtime=$(stat -f "%m" "$TODO_FILE" 2>/dev/null || stat -c "%Y" "$TODO_FILE" 2>/dev/null)
+    fi
+
+    local now
+    now=$(date +%s)
+    local elapsed=$((now - last_refresh))
+
+    if [ "$current_mtime" != "$last_mtime" ] || [ "$current_interval" != "$last_interval" ] || [ "$elapsed" -ge "$current_interval" ]; then
+      clear
+      render_todos
+      echo -e "  ${GRAY}↻ every ${current_interval}s  │  Prefix+$(tmux show-option -gv @todo-key 2>/dev/null || echo 't') to hide${RESET}"
+      last_refresh=$now
+      last_mtime="$current_mtime"
+      last_interval="$current_interval"
+    fi
+    sleep 1
   done
 }
 
 # ── PANE HELPERS ──────────────────────────────────────────────────────────────
 save_pane_id()  { echo "$1" > "$PANE_ID_FILE"; }
-load_pane_id()  { [ -f "$PANE_ID_FILE" ] && cat "$PANE_ID_FILE"; }
-clear_pane_id() { rm -f "$PANE_ID_FILE"; }
+load_pane_id()  { [ -f "$PANE_ID_FILE" ] && cat "$PANE_ID_FILE" 2>/dev/null; }
+clear_pane_id() { rm -f "$PANE_ID_FILE" 2>/dev/null; }
 
 pane_alive() {
   local pid="$1"
@@ -144,7 +178,10 @@ pane_alive() {
 refresh_pane() {
   local pid
   pid=$(load_pane_id)
-  pane_alive "$pid" && tmux send-keys -t "$pid" "" 2>/dev/null
+  if pane_alive "$pid"; then
+    tmux send-keys -t "$pid" "" 2>/dev/null
+  fi
+  return 0
 }
 
 # ── COMMANDS ──────────────────────────────────────────────────────────────────
@@ -296,6 +333,33 @@ open('$TODO_FILE','w').write(json.dumps(data, indent=2))
   refresh_pane
 }
 
+cmd_refresh_rate() {
+  local rate="$1"
+  if [ -z "$rate" ]; then
+    local current
+    current=$(get_refresh_interval)
+    echo -e "Current refresh rate: ${CYAN}${current}s${RESET}"
+    echo -e "Usage: ${CYAN}todo refresh-rate <seconds>${RESET}"
+    return 0
+  fi
+
+  if ! [[ "$rate" =~ ^[1-9][0-9]*$ ]]; then
+    echo -e "${RED}Error:${RESET} Refresh rate must be a positive integer in seconds."
+    echo -e "  Usage: ${CYAN}todo refresh-rate <seconds>${RESET}"
+    exit 1
+  fi
+
+  mkdir -p "$(dirname "$REFRESH_FILE")"
+  echo "$rate" > "$REFRESH_FILE"
+
+  if [ -n "$TMUX" ] || tmux info &>/dev/null; then
+    tmux set-option -g @todo-refresh-interval "$rate" 2>/dev/null
+  fi
+
+  echo -e "${GREEN}✓${RESET} Refresh rate set to ${WHITE}${rate}s${RESET}"
+  refresh_pane
+}
+
 cmd_help() {
   local key
   key=$(tmux show-option -gv @todo-key 2>/dev/null || echo "t")
@@ -315,6 +379,9 @@ ${BOLD}${CYAN}  todo — tmux-todo${RESET}
   ${CYAN}todo list${RESET}                Print list here
   ${CYAN}todo clear${RESET}               Remove completed
 
+  ${BOLD}Configuration${RESET}
+  ${CYAN}todo refresh-rate <sec>${RESET}  Set refresh rate in seconds (e.g. 120)
+
   ${BOLD}tmux.conf Options${RESET}
   ${GRAY}set -g @todo-key              \"t\"${RESET}
   ${GRAY}set -g @todo-pane-width       \"34\"${RESET}
@@ -325,16 +392,17 @@ ${BOLD}${CYAN}  todo — tmux-todo${RESET}
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 case "$1" in
-  --show)            cmd_show ;;
-  --hide)            cmd_hide ;;
-  --toggle)          cmd_toggle ;;
-  --watch-loop)      watch_loop ;;
-  add)               cmd_add "$2" ;;
-  done)              cmd_done "$2" ;;
-  remove|rm)         cmd_remove "$2" ;;
-  clear)             cmd_clear ;;
-  list|"")           render_todos ;;
-  --help|-h|help)    cmd_help ;;
+  --show)                                                        cmd_show ;;
+  --hide)                                                        cmd_hide ;;
+  --toggle)                                                      cmd_toggle ;;
+  --watch-loop)                                                  watch_loop ;;
+  add)                                                           cmd_add "$2" ;;
+  done)                                                          cmd_done "$2" ;;
+  remove|rm)                                                     cmd_remove "$2" ;;
+  clear)                                                         cmd_clear ;;
+  refresh-rate|referesh-rate|refresh_rate|referesh_rate|refresh) cmd_refresh_rate "$2" ;;
+  list|"")                                                       render_todos ;;
+  --help|-h|help)                                                cmd_help ;;
   *)
     echo -e "${RED}Unknown command:${RESET} $1"
     cmd_help
