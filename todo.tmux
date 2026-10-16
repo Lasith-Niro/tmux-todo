@@ -16,3 +16,7 @@ ln -sf "$CURRENT_DIR/scripts/todo.sh" "$HOME/.local/bin/todo"
 TODO_KEY=$(tmux show-option -gv @todo-key 2>/dev/null)
 TODO_KEY="${TODO_KEY:-t}"
 tmux bind-key "$TODO_KEY" run-shell "$CURRENT_DIR/scripts/todo.sh --toggle"
+
+# Hooks for 'all' (auto-open on new tab) and 'follow' (follow active tab)
+tmux set-hook -g after-new-window "run-shell '$CURRENT_DIR/scripts/todo.sh --hook-new-window'"
+tmux set-hook -g after-select-window "run-shell '$CURRENT_DIR/scripts/todo.sh --hook-select-window'"
