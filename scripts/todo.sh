@@ -97,8 +97,11 @@ render_todos() {
 import json, os
 
 TODO_FILE = os.environ.get("TODO_FILE", os.path.expanduser("~/.local/share/todo/todos.json"))
-with open(TODO_FILE) as f:
-    data = json.load(f)
+try:
+    with open(TODO_FILE) as f:
+        data = json.load(f)
+except Exception:
+    data = {"todos": [], "next_id": 1}
 
 todos   = data.get("todos", [])
 pending = [t for t in todos if not t.get("done")]
@@ -116,6 +119,14 @@ Y  = "\033[1;33m"
 Gr = "\033[0;90m"
 C  = "\033[0;36m"
 W  = "\033[1;37m"
+Rd = "\033[1;31m"
+
+PRIO_COLORS = {
+    "high": Rd,
+    "med": Y,
+    "medium": Y,
+    "low": C,
+}
 
 border_top = f"{B}{C}  ── TODO " + "─" * max(0, line_w - 9) + f"{R}"
 border_bot = f"{B}{C}  " + "─" * line_w + f"{R}"
@@ -140,7 +151,9 @@ else:
             tid     = str(t["id"]).rjust(2)
             max_len = max(10, line_w - 7)
             task    = t["task"][:max_len]
-            row(f"{Y}[{tid}]{R} {task}")
+            prio    = t.get("priority", "med")
+            p_color = PRIO_COLORS.get(prio, Y)
+            row(f"{Gr}[{tid}]{R} {p_color}{task}{R}")
 
     if done:
         blank()
@@ -523,28 +536,194 @@ cmd_toggle() {
 }
 
 cmd_add() {
-  local task="$1"
+  local task=""
+  local priority=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -p|--priority)
+        priority="$2"
+        shift 2
+        ;;
+      *)
+        local lower_arg
+        lower_arg=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+        case "$lower_arg" in
+          high|h|1|urgent|med|medium|m|2|normal|low|l|3)
+            if [ -n "$task" ] && [ -z "$priority" ]; then
+              priority="$lower_arg"
+            elif [ -z "$task" ]; then
+              task="$1"
+            else
+              task="$task $1"
+            fi
+            ;;
+          *)
+            if [ -z "$task" ]; then
+              task="$1"
+            else
+              task="$task $1"
+            fi
+            ;;
+        esac
+        shift
+        ;;
+    esac
+  done
+
   if [ -z "$task" ]; then
     echo -e "${RED}Error:${RESET} Please provide a task."
-    echo -e "  Usage: ${CYAN}todo add \"your task\"${RESET}"
+    echo -e "  Usage: ${CYAN}todo add \"your task\" [high|med|low]${RESET}"
+    echo -e "         ${CYAN}todo add \"your task\" -p <priority>${RESET}"
     exit 1
   fi
 
-  local escaped="${task//\'/\'\"\'\"\'}"
-  python3 -c "
-import json
-with open('$TODO_FILE') as f:
-    data = json.load(f)
-new = {'id': data['next_id'], 'task': '$escaped', 'done': False}
-data['todos'].append(new)
-data['next_id'] += 1
-with open('$TODO_FILE', 'w') as f:
+  local result
+  result=$(python3 -c "
+import sys, json
+
+todo_file = sys.argv[1]
+task_str  = sys.argv[2]
+prio_str  = sys.argv[3] if len(sys.argv) > 3 else ''
+
+def norm_prio(p):
+    p = (p or '').strip().lower()
+    if p in ('high', 'h', '1', 'urgent'):
+        return 'high'
+    if p in ('low', 'l', '3'):
+        return 'low'
+    return 'med'
+
+priority = norm_prio(prio_str)
+
+try:
+    with open(todo_file, 'r') as f:
+        data = json.load(f)
+except Exception:
+    data = {'todos': [], 'next_id': 1}
+
+new_id = data.get('next_id', 1)
+new_item = {
+    'id': new_id,
+    'task': task_str,
+    'priority': priority,
+    'done': False
+}
+data.setdefault('todos', []).append(new_item)
+data['next_id'] = new_id + 1
+
+with open(todo_file, 'w') as f:
     json.dump(data, f, indent=2)
-"
-  local new_id
-  new_id=$(python3 -c "import json; d=json.load(open('$TODO_FILE')); print(d['next_id']-1)")
-  echo -e "${GREEN}✓${RESET} Added: ${WHITE}$task${RESET} ${GRAY}[#$new_id]${RESET}"
+
+print(f'{new_id}\t{priority}')
+" "$TODO_FILE" "$task" "$priority")
+
+  local new_id assigned_prio
+  new_id=$(echo "$result" | cut -f1)
+  assigned_prio=$(echo "$result" | cut -f2)
+
+  local p_color="$YELLOW"
+  case "$assigned_prio" in
+    high) p_color="$RED" ;;
+    low)  p_color="$CYAN" ;;
+    *)    p_color="$YELLOW" ;;
+  esac
+
+  echo -e "${GREEN}✓${RESET} Added: ${p_color}$task${RESET} ${GRAY}[#$new_id • $assigned_prio]${RESET}"
   refresh_pane
+}
+
+cmd_prio() {
+  local id="$1"
+  local prio="$2"
+  if [ -z "$id" ] || [ -z "$prio" ]; then
+    echo -e "${RED}Error:${RESET} Provide task ID and priority."
+    echo -e "  Usage: ${CYAN}todo prio <id> <high|med|low>${RESET}"
+    exit 1
+  fi
+
+  local result
+  result=$(python3 -c "
+import sys, json
+
+todo_file = sys.argv[1]
+try:
+    target_id = int(sys.argv[2])
+except ValueError:
+    print('INVALID_ID')
+    sys.exit(0)
+
+prio_str  = sys.argv[3]
+
+def norm_prio(p):
+    p = (p or '').strip().lower()
+    if p in ('high', 'h', '1', 'urgent'):
+        return 'high'
+    if p in ('low', 'l', '3'):
+        return 'low'
+    if p in ('med', 'medium', 'm', '2', 'normal'):
+        return 'med'
+    return None
+
+priority = norm_prio(prio_str)
+if priority is None:
+    print('INVALID_PRIO')
+    sys.exit(0)
+
+try:
+    with open(todo_file, 'r') as f:
+        data = json.load(f)
+except Exception:
+    data = {'todos': [], 'next_id': 1}
+
+found_task = None
+for t in data.get('todos', []):
+    if t.get('id') == target_id:
+        t['priority'] = priority
+        found_task = t.get('task', '')
+        break
+
+if found_task is not None:
+    with open(todo_file, 'w') as f:
+        json.dump(data, f, indent=2)
+    print(f'OK\t{priority}\t{found_task}')
+else:
+    print('NOT_FOUND')
+" "$TODO_FILE" "$id" "$prio")
+
+  local status
+  status=$(echo "$result" | cut -f1)
+
+  case "$status" in
+    OK)
+      local new_prio task_name p_color
+      new_prio=$(echo "$result" | cut -f2)
+      task_name=$(echo "$result" | cut -f3-)
+      case "$new_prio" in
+        high) p_color="$RED" ;;
+        low)  p_color="$CYAN" ;;
+        *)    p_color="$YELLOW" ;;
+      esac
+      echo -e "${GREEN}✓${RESET} Priority set to ${p_color}${new_prio}${RESET} for: ${p_color}${task_name}${RESET} ${GRAY}[#$id]${RESET}"
+      refresh_pane
+      ;;
+    NOT_FOUND)
+      echo -e "${RED}Error:${RESET} Task #$id not found."
+      exit 1
+      ;;
+    INVALID_ID)
+      echo -e "${RED}Error:${RESET} Invalid task ID '$id'."
+      exit 1
+      ;;
+    INVALID_PRIO)
+      echo -e "${RED}Error:${RESET} Invalid priority '$prio'. Use ${CYAN}high${RESET}, ${CYAN}med${RESET}, or ${CYAN}low${RESET}."
+      exit 1
+      ;;
+    *)
+      echo -e "${RED}Error:${RESET} Failed to update priority."
+      exit 1
+      ;;
+  esac
 }
 
 cmd_done() {
@@ -556,21 +735,35 @@ cmd_done() {
 
   local result
   result=$(python3 -c "
-import json
-with open('$TODO_FILE') as f:
-    data = json.load(f)
+import sys, json
+todo_file = sys.argv[1]
+try:
+    target_id = int(sys.argv[2])
+except ValueError:
+    print('NOT_FOUND')
+    sys.exit(0)
+
+try:
+    with open(todo_file) as f:
+        data = json.load(f)
+except Exception:
+    data = {'todos': []}
+
 found = False
-for t in data['todos']:
-    if t['id'] == $id:
+task_name = ''
+for t in data.get('todos', []):
+    if t.get('id') == target_id:
         t['done'] = True
         found = True
-        print(t['task'])
+        task_name = t.get('task', '')
         break
 if found:
-    open('$TODO_FILE','w').write(json.dumps(data, indent=2))
+    with open(todo_file, 'w') as f:
+        json.dump(data, f, indent=2)
+    print(task_name)
 else:
     print('NOT_FOUND')
-")
+" "$TODO_FILE" "$id")
   if [ "$result" = "NOT_FOUND" ]; then
     echo -e "${RED}Error:${RESET} Task #$id not found."
   else
@@ -588,15 +781,33 @@ cmd_remove() {
 
   local result
   result=$(python3 -c "
-import json
-with open('$TODO_FILE') as f:
-    data = json.load(f)
-name = next((t['task'] for t in data['todos'] if t['id'] == $id), 'NOT_FOUND')
+import sys, json
+todo_file = sys.argv[1]
+try:
+    target_id = int(sys.argv[2])
+except ValueError:
+    print('NOT_FOUND')
+    sys.exit(0)
+
+try:
+    with open(todo_file) as f:
+        data = json.load(f)
+except Exception:
+    data = {'todos': []}
+
+name = 'NOT_FOUND'
+todos = data.get('todos', [])
+for t in todos:
+    if t.get('id') == target_id:
+        name = t.get('task', '')
+        break
+
 if name != 'NOT_FOUND':
-    data['todos'] = [t for t in data['todos'] if t['id'] != $id]
-    open('$TODO_FILE','w').write(json.dumps(data, indent=2))
+    data['todos'] = [t for t in todos if t.get('id') != target_id]
+    with open(todo_file, 'w') as f:
+        json.dump(data, f, indent=2)
 print(name)
-")
+" "$TODO_FILE" "$id")
   if [ "$result" = "NOT_FOUND" ]; then
     echo -e "${RED}Error:${RESET} Task #$id not found."
   else
@@ -691,21 +902,22 @@ cmd_help() {
 ${BOLD}${CYAN}  todo — tmux-todo${RESET}
 
   ${BOLD}Pane Control${RESET}
-  ${CYAN}todo --show${RESET}              Open side pane
-  ${CYAN}todo --hide${RESET}              Close side pane
-  ${CYAN}todo --toggle${RESET}            Toggle side pane
-  ${GRAY}Prefix + $key${RESET}             Toggle (keybind)
+  ${CYAN}todo --show${RESET}                   Open side pane
+  ${CYAN}todo --hide${RESET}                   Close side pane
+  ${CYAN}todo --toggle${RESET}                 Toggle side pane
+  ${GRAY}Prefix + $key${RESET}                  Toggle (keybind)
 
   ${BOLD}Tasks${RESET}
-  ${CYAN}todo add \"task\"${RESET}          Add a new task
-  ${CYAN}todo done <id>${RESET}           Mark as complete
-  ${CYAN}todo remove <id>${RESET}         Remove a task
-  ${CYAN}todo list${RESET}                Print list here
-  ${CYAN}todo clear${RESET}               Remove completed
+  ${CYAN}todo add \"task\" [prio]${RESET}        Add task (prio: high, med, low)
+  ${CYAN}todo prio <id> <prio>${RESET}          Set task priority (high, med, low)
+  ${CYAN}todo done <id>${RESET}                Mark as complete
+  ${CYAN}todo remove <id>${RESET}              Remove a task
+  ${CYAN}todo list${RESET}                     Print list here
+  ${CYAN}todo clear${RESET}                    Remove completed
 
   ${BOLD}Configuration${RESET}
-  ${CYAN}todo refresh-rate <sec>${RESET}  Set refresh rate in seconds (e.g. 120)
-  ${CYAN}todo scope <mode>${RESET}        Set tab scope: current | all | follow (current: ${current_scope})
+  ${CYAN}todo refresh-rate <sec>${RESET}       Set refresh rate in seconds (e.g. 120)
+  ${CYAN}todo scope <mode>${RESET}             Set tab scope: current | all | follow (current: ${current_scope})
 
   ${BOLD}tmux.conf Options${RESET}
   ${GRAY}set -g @todo-key              \"t\"${RESET}
@@ -724,7 +936,8 @@ case "$1" in
   --watch-loop)                                                  watch_loop ;;
   --hook-new-window)                                             cmd_hook_new_window ;;
   --hook-select-window)                                          cmd_hook_select_window ;;
-  add)                                                           cmd_add "$2" ;;
+  add)                                                           shift; cmd_add "$@" ;;
+  prio|priority)                                                 shift; cmd_prio "$@" ;;
   done)                                                          cmd_done "$2" ;;
   remove|rm)                                                     cmd_remove "$2" ;;
   clear)                                                         cmd_clear ;;

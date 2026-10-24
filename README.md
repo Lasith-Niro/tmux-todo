@@ -5,8 +5,9 @@ A lightweight terminal todo app with a live tmux side pane. No dependencies beyo
 ## Features
 
 - Live-updating side pane inside tmux
+- Priority levels (`high`, `med`, `low`) with distinct colors
 - Toggle pane with a single keybind
-- Add, complete, remove tasks from any pane
+- Add, complete, remove tasks, and update priority from any pane
 - Configurable width, side, refresh rate, and keybind
 - Stores todos in `~/.local/share/todo/todos.json`
 
@@ -34,7 +35,9 @@ git clone https://github.com/Lasith-Niro/tmux-todo ~/.tmux/plugins/tmux-todo
 | `todo --show` | Open side pane |
 | `todo --hide` | Close side pane |
 | `todo --toggle` | Toggle side pane |
-| `todo add "task"` | Add a task |
+| `todo add "task" [prio]` | Add a task with optional priority (`high`, `med`, `low`) |
+| `todo add "task" -p <prio>` | Add a task using priority flag |
+| `todo prio <id> <prio>` | Change task priority (`high`, `med`, `low`) |
 | `todo done <id>` | Mark as complete |
 | `todo remove <id>` | Remove a task |
 | `todo list` | Print list in current pane |
@@ -42,6 +45,14 @@ git clone https://github.com/Lasith-Niro/tmux-todo ~/.tmux/plugins/tmux-todo
 | `todo refresh-rate <sec>` | Set refresh rate in seconds (e.g. `todo refresh-rate 120`) |
 | `todo scope <mode>` | Set tab scope: `current`, `all`, or `follow` |
 | `Prefix + t` | Toggle pane (keybind) |
+
+### Priority & Colors
+
+Tasks are displayed with colors matching their priority level:
+- **High** (`high`, `h`, `1`, `urgent`): **Red**
+- **Medium** (`med`, `medium`, `m`, `2`): **Yellow** *(default)*
+- **Low** (`low`, `l`, `3`): **Cyan**
+- **Completed**: **Dim gray** (regardless of original priority)
 
 ## Configuration
 
