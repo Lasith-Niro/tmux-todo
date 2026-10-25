@@ -94,7 +94,7 @@ fi
 # ── RENDER ────────────────────────────────────────────────────────────────────
 render_todos() {
   python3 << PYEOF
-import json, os
+import json, os, textwrap
 
 TODO_FILE = os.environ.get("TODO_FILE", os.path.expanduser("~/.local/share/todo/todos.json"))
 try:
@@ -137,6 +137,16 @@ def row(content, visible_len=0):
 def blank():
     print()
 
+def wrap_task(task_text, width):
+    lines = []
+    for paragraph in task_text.splitlines() or [""]:
+        wrapped = textwrap.wrap(paragraph, width=width, break_long_words=True, break_on_hyphens=True)
+        if wrapped:
+            lines.extend(wrapped)
+        else:
+            lines.append("")
+    return lines or [""]
+
 print()
 print(border_top)
 blank()
@@ -149,20 +159,32 @@ else:
         row(f"{B}{W}Pending{R}")
         for t in pending:
             tid     = str(t["id"]).rjust(2)
-            max_len = max(10, line_w - 7)
-            task    = t["task"][:max_len]
+            prefix  = f"{Gr}[{tid}]{R} "
+            indent  = " " * (len(f"[{tid}]") + 1)
             prio    = t.get("priority", "med")
             p_color = PRIO_COLORS.get(prio, Y)
-            row(f"{Gr}[{tid}]{R} {p_color}{task}{R}")
+            wrap_w  = max(10, line_w - len(f"[{tid}]") - 1)
+            lines   = wrap_task(t.get("task", ""), wrap_w)
+            for i, line in enumerate(lines):
+                if i == 0:
+                    row(f"{prefix}{p_color}{line}{R}")
+                else:
+                    row(f"{indent}{p_color}{line}{R}")
 
     if done:
         blank()
         row(f"{B}{Gr}Completed{R}")
         for t in done:
             tid     = str(t["id"]).rjust(2)
-            max_len = max(10, line_w - 7)
-            task    = t["task"][:max_len]
-            row(f"{G}[{tid}]{R} {D}{task}{R}")
+            prefix  = f"{G}[{tid}]{R} "
+            indent  = " " * (len(f"[{tid}]") + 1)
+            wrap_w  = max(10, line_w - len(f"[{tid}]") - 1)
+            lines   = wrap_task(t.get("task", ""), wrap_w)
+            for i, line in enumerate(lines):
+                if i == 0:
+                    row(f"{prefix}{D}{line}{R}")
+                else:
+                    row(f"{indent}{D}{line}{R}")
 
 blank()
 summary = f"{len(done)}/{len(todos)} done"
